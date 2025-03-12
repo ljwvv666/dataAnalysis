@@ -1,0 +1,1254 @@
+【题目一】
+已知本游戏的角色是每次游戏开局时随机分配的，请问一局游戏有几个玩
+家参与，他们的角色分别是什么？哪个角色的胜率更高（每个角色胜率分别是多
+少）？
+```{r}
+#install.packages("data.table")
+library(data.table)
+
+game_record <- fread("tgamerecord.csv",
+                     col.names = c("no","round","starttime","endtime","note"))
+usergame_record <- fread("tusergamerecord.csv",
+                     col.names = c("no", "game_no", "user_no", "seat_index", "camp_no", "role_no", "life", "win", "escape"))
+
+nrow(game_record)
+nrow(usergame_record)
+summary(game_record)
+summary(usergame_record)
+```
+------------------------【数据预处理】------------------------
+
+在game_record当中删除掉某些没有对应用户记录的游戏场次
+```{r}
+print(length(game_record$no))#1853210
+print(length(unique(usergame_record$game_no)))#1853162
+#通过观察这个数字可以发现，用户表中的游戏场次(1853162)和游戏表中的场次数目不对应（1853210）
+#因此说明有些场次没有用户信息，这里将这些缺失的场次找出来,从game_record中删去
+lost_game<-as.vector(setdiff(game_record$no,usergame_record$game_no))
+print(lost_game)
+
+game_record <- game_record[!(no %in% lost_game)]
+nrow(game_record)# 1853162,与用户表中的游戏场次一致
+lost_game
+```
+找出用户表中人数不是12个的游戏场次,从用户表中删除
+```{r}
+non_12_games <-usergame_record[, .N, by = game_no][N!=12,game_no]
+usergame_record <- usergame_record[!(game_no %in% non_12_games)]
+game_record <- game_record[!(no %in% non_12_games)]
+
+nrow(usergame_record)/12 #1853115
+nrow(game_record)
+
+non_12_games
+```
+至此均为正常的十二人场的游戏。
+
+
+------------------------【一局游戏有几个玩家参与】------------------------
+根据实验指导书，总结了以下几个玩家候选项：平民、狼人、预言家、女巫、守卫、白痴、猎人、骑士、白狼王、熊
+接下来开始进行一一排除验证
+```{r}
+
+# 狼人
+print("狼人")
+any(grepl('1:', game_record$note))
+
+# 预言家
+print("预言家")
+any(grepl('2:', game_record$note))
+
+# 女巫
+print("女巫")
+any(grepl('3:', game_record$note))
+
+# 守卫
+print("守卫")
+any(grepl('6:', game_record$note))
+
+
+# 白痴
+print("白痴")
+any(grepl('I', game_record$note))
+
+# 猎人
+print("猎人")
+any(grepl('CO', game_record$note))
+
+# 骑士
+print("骑士")
+any(grepl('R', game_record$note))
+
+# 白狼王
+print("白狼王")
+any(grepl('W', game_record$note))
+
+#熊
+print("熊")
+any(grepl('14', game_record$note))
+
+```
+根据以上内容可以判断出实际上角色只有以下几位：平民、狼人、预言家、女巫、守卫、猎人
+
+------------------------【哪个角色的胜率更高】------------------------
+
+```{r}
+teste<-head(usergame_record,12)
+# 初步观察一下每一局游戏中角色人数的配置情况  发现差不多都是4-4-1-1-1-1的配置
+role_distribution <- usergame_record[,.N,by=.(game_no,role_no)][order(game_no,role_no)]
+
+role_distribution
+
+```
+```{r}
+# 验证每场游戏是否满足条件
+# 条件：role_no == 0 和 role_no == 1 的数量为 4，其余角色的数量均为 1
+check_conditions <- role_distribution[, .(
+  valid = all(
+    (role_no %in% c(0, 1) & N == 4) | (!role_no %in% c(0, 1) & N == 1)
+  )
+), by = game_no]
+
+# 筛选出不满足条件的 game_no
+invalid_games <- check_conditions[valid == FALSE, game_no]
+invalid_games
+# 打印不符合条件的游戏场次
+if (length(invalid_games) > 0) {
+  cat("不符合条件的游戏场次:\n")
+  print(invalid_games)
+} else {
+  cat("所有游戏场次均符合条件。\n")
+}
+as.vector(invalid_games)
+
+role_distribution[game_no %in% invalid_games]
+
+# 这些都是异常场次，都删掉
+usergame_record <- usergame_record[!(game_no %in% invalid_games)]
+
+```
+
+```{r}
+
+nrow(usergame_record[win == 0])
+
+game_total <- nrow(game_record)
+
+options(scipen = 999)  # 禁用科学计数法
+
+role_victory <- usergame_record[,.N,by=.(game_no,role_no,win)]
+
+role_victory_rate <- data.table(
+  role_no = c(0, 1, 2, 3, 4, 6),  # 定义角色编号
+  win_rate = c(
+    nrow(role_victory[role_no == 0 & win == 1]) / game_total,
+    nrow(role_victory[role_no == 1 & win == 1]) / game_total,
+    nrow(role_victory[role_no == 2 & win == 1]) / game_total,
+    nrow(role_victory[role_no == 3 & win == 1]) / game_total,
+    nrow(role_victory[role_no == 4 & win == 1]) / game_total,
+    nrow(role_victory[role_no == 6 & win == 1]) / game_total
+  )
+)[order(-win_rate)]
+role_victory_rate
+```
+根据以上结果可以得知，狼人（编号为1）的角色胜率最高
+------------------------【确定各个角色编号对应的角色】------------------------
+根据数量为4可以推出平民编号为0，狼人编号为1。阵营1是平民，阵营2是神职，阵营3是狼人
+根据CO技能特性随意查看一条note数据即可得出猎人编号为4
+因此目前无法确定的角色有女巫、守卫、预言家，剩下的编号为2,3,6
+```{r}
+library(data.table)
+```
+特性一：女巫不太可能会毒死自己
+
+```{r}
+library("ggplot2")
+
+#位于第二阵营（预言家、女巫、守卫）并且被毒死，数量最少的应该就是女巫自己的角色编号
+whois_witch <- usergame_record[life == 3]
+
+whois_witch$role_no <- factor(whois_witch$role_no)
+qplot(role_no,data = whois_witch, geom = "bar",fill = I("skyblue"), color = I("black"))+theme_minimal()+labs(title = "who is witch")+
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 将标题居中
+  )
+```
+3号角色明显低于其他角色，由此判断3号角色应该是女巫
+
+特性二：预言家不太可能预言自己的身份
+```{r}
+library(data.table)
+set.seed(123)
+#由于数据量过大，在使用正则表达式进行匹配的时候过于耗时，因此选取部分样本
+game_record_sub <- game_record[sample(.N, size = floor(0.2 * .N))]
+
+game_record_sub[, seat_index_list := regmatches(note, gregexpr("2:\\[(\\d+)", note))]
+# 提取并只保留数字部分
+game_record_sub[, seat_index_list := lapply(seat_index_list, function(x) gsub("2:\\[", "", x))]
+
+game_record_sub$seat_index_list <-  as.character(game_record_sub$seat_index_list)
+
+head(game_record_sub)
+
+#合并表
+whois_prophet <- merge(game_record_sub[,.(no,seat_index_list)], usergame_record[,.(game_no,seat_index,role_no)], by.x = "no", by.y = "game_no")
+setDT(whois_prophet)  # 确保 whois_prophet 是 data.table
+# 将 seat_index_list 转换为字符串以加快匹配
+whois_prophet[, seat_index_list := gsub("[^0-9 ]", "", seat_index_list)]
+whois_prophet$seat_index <- as.character(whois_prophet$seat_index)
+
+head(whois_prophet)
+# 逐行匹配
+whois_prophet$matched <- mapply(function(index, list_str) {
+  grepl(index, list_str)
+}, whois_prophet$seat_index, whois_prophet$seat_index_list)
+
+whois_prophet <- whois_prophet[matched == 1]
+
+prop.table(table(whois_prophet$role_no))
+
+```
+```{r}
+whois_prophet$role_no <- factor(whois_prophet$role_no)
+qplot(role_no,data = whois_prophet, geom = "bar",fill = I("orange"), color = I("black"))+theme_minimal()+labs(title = "who is prophet")+
+  theme(
+    plot.title = element_text(hjust = 0.5)  # 将标题居中
+  )
+```
+显然二号远低于其他角色，因此二号为预言家。
+经过排除可以得知六号为守卫
+
+【题目二】
+我们发现有些玩家总在一起玩（也可能有假用户），并通过作弊为某个账号刷分、刷胜率等等。
+这类用户的特点是：
+跟某个/某些用户玩的时候胜率极高/极低，而跟其他用户玩胜率又是正常的。
+请给出找出这些作弊的算法（或者生成一个用户的作弊指标，比如0-1 之间的数值，数值越高代
+表越有可能作弊）、R 代码、找到的作弊用户列表数据。
+```{r}
+library(data.table)
+```
+```{r}
+usergame_record_filtered <- usergame_record[,.N,by=user_no]
+print(nrow(usergame_record_filtered))
+
+usergame_record_filtered <- usergame_record_filtered[N > 5]
+print(nrow(usergame_record_filtered))
+head(usergame_record_filtered)[order(-user_no)]
+```
+总共有八十万用户
+
+
+```{r}
+usergame_record2 <- usergame_record 
+user_combination <- merge(usergame_record,usergame_record2,by = "game_no",allow.cartesian = TRUE)
+
+user_combination <- user_combination[,-c("life.x","life.y","camp_no.x","camp_no.y","seat_index.x","seat_index.y")]
+user_combination <- user_combination[user_no.x != user_no.y]
+setkey(user_combination,user_no.x,user_no.y)
+
+head(user_combination,10)
+```
+作弊用户的定义是：“有些玩家总在一起玩（也可能有假用户），
+并通过作弊为某个账号刷分、刷胜率等等。这类用户的特点是：跟某个/某些用
+户玩的时候胜率极高/极低，而跟其他用户玩胜率又是正常的。”
+
+因此这里直接筛选掉一起玩次数小于3的玩家对
+```{r}
+# 筛选对战场次大于三的玩家组合
+user_combination_summary <- user_combination[,.(.N),by=.(user_no.x,user_no.y)][N > 3]
+setkey(user_combination_summary,user_no.x,user_no.y)
+# 使用 i 来过滤，保留那些在 summary 中存在的组合
+user_combination <- user_combination[user_combination_summary]
+setnames(user_combination,"N","total_times")
+user_combination
+```
+
+```{r}
+# 计算胜率
+user_win <- user_combination[, .(win_count = .N, total_times = first(total_times)), by = .(user_no.x, user_no.y, win.x)]
+user_win[,`:=`(x_win_rate=win_count / total_times)]
+
+# 对玩家对为1的情况（只输不赢，只平局不赢）进行一下转化（包括win.x和胜率）
+user_win <- user_win[,.(count = .N,win.x,win_count,total_times,x_win_rate),by=.(user_no.x, user_no.y)]
+user_win[count == 1 & win.x == 0]# 没有只平局的玩家对
+user_win[count == 1 & win.x != 1,`:=`(win.x = 1, x_win_rate = 1 - x_win_rate)]
+
+user_win <- user_win[win.x == 1,.(user_no.x,user_no.y,x_win_rate)]
+
+head(user_win)
+
+# 计算逃跑率
+user_escape <- user_combination[,.(escape_count = .N,total_times = first(total_times)),by = .(user_no.x,user_no.y,escape.x)]
+user_escape[,`:=`(x_escape_rate=escape_count / total_times)]
+
+user_escape <- user_escape[,.(count = .N,	escape.x,escape_count,total_times,x_escape_rate),by = .(user_no.x, user_no.y)][count == 1 & escape.x == 0,`:=`(escape.x = 1,x_escape_rate = 1-x_escape_rate)]
+
+user_escape <- user_escape[escape.x==1]
+user_escape <- user_escape[,.(user_no.x,user_no.y,x_escape_rate)]
+head(user_escape)
+
+win_rate_avg <- mean(user_win$x_win_rate)
+escape_rate_avg <- mean(user_escape$x_escape_rate)
+total_times_avg <- mean(user_combination_summary$N)
+```
+
+```{r}
+# 互动次数计算
+user_interact <- unique(subset(user_combination,select = c("user_no.x","user_no.y","total_times")))
+head(user_interact)
+
+# 计算每场游戏持续时间
+game_record$starttime <- as.POSIXct(game_record$starttime, format = "%d/%m/%Y %H:%M:%S")
+game_record$endtime <- as.POSIXct(game_record$endtime, format = "%d/%m/%Y %H:%M:%S")
+
+game_record$duration <- as.numeric(difftime(game_record$endtime, game_record$starttime, units = "mins"))
+head(game_record)
+duration_avg <- mean(game_record$duration)
+# 游戏持续时间计算
+user_combination_summary <- user_combination[,.N,by=.(game_no,user_no.x,user_no.y)]
+
+user_combination_summary <- merge(user_combination_summary,game_record,by.x="game_no",by.y = "no")[,.(game_no,user_no.x,user_no.y,starttime,endtime,duration)]
+
+setkey(user_combination_summary,user_no.x,user_no.y)
+
+user_duration <- user_combination_summary[,.(mean_duration = mean(duration)),by=.(user_no.x,user_no.y)]
+
+head(user_duration)
+```
+至此用户对之间的胜率、逃跑率和时间都计算完毕
+
+用户对表构建
+```{r}
+user_pairs <- merge(user_escape,user_win,by=c("user_no.x","user_no.y"),all.x = TRUE)
+user_pairs <- merge(user_pairs,user_duration,by=c("user_no.x","user_no.y"))
+user_pairs <- merge(user_pairs,user_interact,by=c("user_no.x","user_no.y"))
+# 之前在创建user_win表的时候没有对“只输只平局”的用户对进行收录，因此他们的胜率都为空，这里将胜率都赋值为0
+user_pairs[is.na(x_win_rate)] # 存在 584 行
+user_pairs[is.na(x_win_rate),`:=`(x_win_rate=0)]
+user_pairs[is.na(x_win_rate)] # 0行
+head(user_pairs)
+```
+根据上面的表计算一下单个用户的各种信息
+```{r}
+library("ggplot2")
+library("data.table")
+
+single_user <- user_pairs[, .(
+  user_no = user_no.x,
+  escape_rate = mean(x_escape_rate),
+  win_rate = mean(x_win_rate),
+  duration = mean(mean_duration),
+  interact_times = mean(total_times)
+), by = user_no.x][,`:=`(user_no.x = NULL)]
+
+head(single_user)
+qplot(win_rate,data=single_user,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Win Rate Distribution")+theme_minimal()
+
+qplot(escape_rate,data=single_user,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Escape Rate Distribution")+theme_minimal()
+
+qplot(duration,data=single_user,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Duration Distribution")+theme_minimal()
+
+qplot(interact_times,data=single_user,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Interact Times Distribution")+theme_minimal()
+
+single_user[,is_cheat:=]
+```
+
+
+计算出单用户和全体用户之间指标的偏差，
+计算出用户pairs 各种指标和单用户指标之间的偏差
+```{r}
+single_user <- single_user[,.(user_no,escape_rate,
+                              escape_bias = escape_rate-escape_rate_avg,
+                              win_rate,
+                              win_bias = win_rate-win_rate_avg,
+                              duration,
+                              duration_bias = duration-duration_avg,
+                              interact_times,
+                              interact_bias = interact_times-total_times_avg)]
+
+user_pairs <- merge(user_pairs,single_user,by.x = "user_no.x",by.y = "user_no",all.x = TRUE)[,-c("escape_bias","win_bias","duration_bias","interact_bias")]
+
+user_pairs[,`:=`(x_escape_bias = x_escape_rate - escape_rate,
+                 x_win_bias = x_win_rate - win_rate,
+                 x_duration_bias = mean_duration - duration,
+                 x_interact_bias = total_times  - interact_times)]
+user_pairs <- user_pairs[,.(user_no.x,user_no.y,x_escape_bias,x_win_bias,x_duration_bias,x_interact_bias)]
+
+single_user <- single_user[,.(user_no,escape_bias,duration_bias,win_bias,interact_bias)]
+head(single_user)
+head(user_pairs)
+```
+
+【开始考虑时间】
+
+
+```{r}
+library("data.table")
+
+# 已知2017年4月1号是周六(1-7分别对应周一到周日)
+game_record[, days := as.POSIXlt(as.Date(starttime))$wday+1]
+
+# 提取小时，添加 `periods` 列（1: 凌晨, 2: 上午, 3: 下午, 4: 晚上）
+game_record[, hour := as.numeric(format(as.POSIXct(starttime), "%H"))]
+game_record[, periods := fifelse(hour < 6, 'night',#凌晨 
+                          fifelse(hour < 12, 'morning',#上午 
+                                  fifelse(hour < 18, 'afternoon',# 下午 
+                                          'evening')))]# 晚上
+game_record[,hour := NULL]
+
+# 设定参考日期
+start_date <- as.POSIXct('2017-04-01 00:00:00', tz="UTC")
+
+# 计算每个日期距离2017-04-01的天数差，并加1，确保2017-04-01对应时间步1
+game_record[, days_diff := as.numeric(difftime(starttime, start_date, units = "days")) + 1]
+
+# 将天数差转换为时间步编号（每5天为一个时间步）共六个时间步
+game_record[, time_step := ceiling(days_diff / 5)]
+
+game_record[time_step==7,`:=`(time_step = 6)][,`:=`(days_diff=NULL)]
+
+summary(game_record)
+
+```
+
+
+```{r}
+
+usergame_record[,`:=`(no = NULL)]
+usergame_record <- merge(usergame_record,game_record[,.(no,time_step,days,periods,duration)],by.x = "game_no",by.y = "no")
+head(usergame_record)
+```
+将成对用户信息和游戏信息结合起来
+```{r}
+user_combination <- merge(user_combination,game_record[,c("no","time_step","days","periods")],by.x = "game_no",by.y = "no")
+
+user_combination[,`:=`(total_times=.N),by = .(user_no.x,user_no.y,time_step)]
+head(user_combination)
+
+```
+计算胜率
+```{r}
+# 计算胜率
+user_win <- user_combination[, .(win_count = .N, total_times = first(total_times)), by = .(user_no.x, user_no.y, win.x,time_step)]
+
+user_win[,`:=`(x_win_rate=win_count / total_times)]
+# 【不存在win.x == 1的情况】  即count==1（只输只平局）count==2（输且平局）---对应胜率都是0
+# 只保留记录获胜信息的行（先不用考虑不存在win.x==1的玩家对，之后在合并的时候直接取胜率为0即可）
+user_win <- user_win[win.x == 1,.(time_step,user_no.x,user_no.y,x_win_rate)]
+
+head(user_win)
+```
+
+```{r}
+# 计算逃跑率
+user_escape <- user_combination[,.(escape_count = .N,total_times = first(total_times)),by = .(user_no.x,user_no.y,escape.x,time_step)]
+user_escape[,`:=`(x_escape_rate=escape_count / total_times)]
+#反转一下
+user_escape <- user_escape[,.(count = .N,	escape.x,escape_count,total_times,x_escape_rate),by = .(user_no.x, user_no.y,time_step)][count == 1 & escape.x == 0,`:=`(escape.x = 1,x_escape_rate = 1-x_escape_rate)]
+
+user_escape <- user_escape[escape.x==1]
+user_escape <- user_escape[,.(time_step,user_no.x,user_no.y,x_escape_rate)]
+head(user_escape)
+```
+
+```{r}
+win_rate_avg <- mean(user_win$x_win_rate)
+escape_rate_avg <- mean(user_escape$x_escape_rate)
+total_times_avg <- mean(user_combination_summary$N)
+```
+
+
+```{r}
+# 互动次数计算
+user_interact <- unique(subset(user_combination,select = c("time_step","user_no.x","user_no.y","total_times")))
+head(user_interact)
+head(user_interact)
+```
+【先不管】
+```{r}
+# 计算每场游戏持续时间
+game_record$starttime <- as.POSIXct(game_record$starttime, format = "%d/%m/%Y %H:%M:%S")
+game_record$endtime <- as.POSIXct(game_record$endtime, format = "%d/%m/%Y %H:%M:%S")
+
+game_record$duration <- as.numeric(difftime(game_record$endtime, game_record$starttime, units = "mins"))
+head(game_record)
+duration_avg <- mean(game_record$duration)
+```
+
+```{r}
+
+# 游戏持续时间计算
+user_combination_summary <- user_combination[,.N,by=.(game_no,user_no.x,user_no.y,time_step)]
+
+user_combination_summary <- merge(user_combination_summary,game_record,by.x="game_no",by.y = "no")[,.(time_step.x,game_no,user_no.x,user_no.y,starttime,endtime,duration)]
+setnames(user_combination_summary,"time_step.x","time_step")
+
+setkey(user_combination_summary,time_step,user_no.x,user_no.y)
+
+user_duration <- user_combination_summary[,.(mean_duration = mean(duration)),by=.(time_step,user_no.x,user_no.y)]
+
+head(user_duration)
+```
+
+开始合并，构成动态边表
+```{r}
+dynamic_edges <- merge(user_escape,user_win,by=c("time_step","user_no.x","user_no.y"),all.x = TRUE)
+dynamic_edges <- merge(dynamic_edges,user_duration,by=c("time_step","user_no.x","user_no.y"))
+dynamic_edges <- merge(dynamic_edges,user_interact,by=c("time_step","user_no.x","user_no.y"))
+# 之前在创建user_win表的时候没有对“只输只平局”的用户对进行收录，因此他们的胜率都为空，这里将胜率都赋值为0
+dynamic_edges[is.na(x_win_rate)] # 存在 121043 行
+dynamic_edges[is.na(x_win_rate),`:=`(x_win_rate=0)]
+dynamic_edges[is.na(x_win_rate)] # 0行
+head(dynamic_edges)
+```
+根据动态边表生成动态节点表
+```{r}
+single_total_times <- usergame_record[,.(total_times=.N),by=.(time_step,user_no)]
+
+dynamic_nodes <- dynamic_edges[, .(
+  escape_rate = mean(x_escape_rate),
+  win_rate = mean(x_win_rate),
+  duration = mean(mean_duration)
+), by = .(time_step,user_no.x)]
+
+dynamic_nodes <- merge(dynamic_nodes,single_total_times,by.x=c("time_step","user_no.x"),by.y = c("time_step","user_no"))
+head(dynamic_nodes)
+
+```
+计算各个指标的中位数表示“正常水平”
+```{r}
+library("ggplot2")
+qplot(win_rate,data=dynamic_nodes,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Win Rate Distribution")+theme_minimal()
+
+qplot(escape_rate,data=dynamic_nodes,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Escape Rate Distribution")+theme_minimal()
+
+qplot(duration,data=dynamic_nodes,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Duration Distribution")+theme_minimal()
+
+qplot(total_times,data=dynamic_nodes,geom = "histogram",fill = I("steelblue"),color = I("black"))+labs(title = "Total Times Distribution")+theme_minimal()
+
+win_rate_med<-median(dynamic_nodes$win_rate)
+escape_rate_med <- median(dynamic_nodes$escape_rate)
+duration_med<- median(dynamic_nodes$duration)
+total_times_med<- median(dynamic_nodes$total_times)
+```
+
+```{r}
+report <- fread("trealtime_report.csv",
+                     col.names = c("user_no.x","num1","no","num2","user_no.y","comment"))
+
+report <- report[grepl("互通", comment) | grepl("离线", comment) | grepl("挂机", comment) | grepl("场外", comment), ]
+report
+
+report_list<-unique(report[,.(user_no.x)])
+setkey(report_list,user_no.x)
+report_list
+```
+```{r}
+dynamic_nodes[user_no.x%in%report_list$user_no.x,is_report:=1]
+dynamic_nodes[is.na(is_report),is_report:=0]
+dynamic_nodes[is_report==1]
+
+dynamic_edges[,is_report:=NULL]
+dynamic_edges[user_no.x%in%report_list$user_no.x&user_no.y%in%report_list$user_no.x,is_report:=1]
+dynamic_edges[is.na(is_report),is_report:=0]
+dynamic_edges[is_report==1]
+
+cor(dynamic_edges[,.(x_win_rate_bias,x_escape_rate_bias,x_duration_bias,x_total_times_bias,is_report)])
+```
+
+更新动态节点中各项偏差值，计算异常定点【权重的设置！！！！记得改进！！！！】
+```{r}
+options(scipen = 999)  # 禁用科学计数法
+# 单人的各种平均指标,为了减少极值的影响，这里使用中位数
+single_matrix_under_time_step <- unique(dynamic_nodes[,.(escape_rate_med = median(escape_rate),win_rate_med=median(win_rate),N=.N),by=.(time_step)][,`:=`(user_no.x = NULL,N = NULL)])
+head(single_matrix_under_time_step)
+#在每个timestep中逃跑率和获胜率的中位数均相同，下面直接使用
+
+#更新节点偏差值
+dynamic_nodes[, `:=`(
+  escape_rate_bias = escape_rate - 0,
+  win_rate_bias = win_rate - 0.5
+)][, `:=`(
+  escape_rate_bias = (escape_rate_bias - min(escape_rate_bias)) / (max(escape_rate_bias) - min(escape_rate_bias)),
+  win_rate_bias = (win_rate_bias - min(win_rate_bias)) / (max(win_rate_bias) - min(win_rate_bias))
+)]
+
+dynamic_nodes
+```
+
+```{r}
+# 权重组合
+w1 <- seq(0.1, 0.9, by = 0.1)
+w2 <- 1 - w1
+
+# 存储结果
+results <- data.table(w1 = numeric(), w2 = numeric(), correlation = numeric())
+
+# 计算每组权重下的相关性
+for (i in seq_along(w1)) {
+  dynamic_nodes[, cheat_score := w1[i] * abs(win_rate_bias) + w2[i] * escape_rate_bias]
+  corr <- cor(dynamic_nodes$cheat_score, dynamic_nodes$is_report)
+  results <- rbind(results, data.table(w1 = w1[i], w2 = w2[i], correlation = corr))
+}
+
+# 绘制相关性变化图
+ggplot(results, aes(x = w1, y = correlation)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(
+    title = "Correlation between Cheat Score and Is Report under Different Weights",
+    x = "Weight for win_rate_bias (w1)",
+    y = "Correlation"
+  ) +
+  theme_minimal()
+```
+
+选定胜率偏差值的权重为0.1构成评分函数，使用滑动窗口进行异常节点检测
+
+滑动窗口做法
+```{r}
+dynamic_nodes[,`:=`(cheat_score=0.6*abs(win_rate_bias)+0.4*escape_rate_bias)]
+dynamic_nodes[,`:=`(cheat_score_mean=NULL,cheat_score_sd=NULL)]
+
+# 设置滑动窗口大小
+window_size <- 3
+
+# 计算每个用户在滑动窗口内的均值和标准差
+dynamic_nodes[, `:=`(
+  cheat_score_mean = frollmean(cheat_score, window_size, align = "right",na.rm = TRUE),
+  cheat_score_sd = frollapply(cheat_score, window_size, sd, align = "right",na.rm = TRUE)
+), by = user_no.x]
+
+# 检测异常：如果cheat_score的变化大于均值 + 标准差，则判定为异常
+dynamic_nodes[, is_cheat := ifelse(
+  abs(cheat_score - cheat_score_mean) > 1.15*cheat_score_sd, 1, 0
+), by = user_no.x]
+
+# 查看结果，标记为异常的用户
+dynamic_nodes[is_cheat == 1]
+
+
+dynamic_nodes
+```
+
+构建动态边中的各个指标【指标分布不太理想需要修改。。。。】
+```{r}
+dynamic_edges[,`:=`(x_win_rate_med = median(x_win_rate),
+                     x_escape_rate_med = median(x_escape_rate),
+                     x_duration_med = median(mean_duration),
+                     x_total_times_med = median(total_times),N = .N),
+                                       by = .(time_step,user_no.x)][,`:=`(N=NULL)]
+
+dynamic_edges[,`:=`(x_win_rate_bias = x_win_rate-x_win_rate_med,
+                    x_escape_rate_bias = x_escape_rate-x_escape_rate_med,
+                    x_duration_bias = mean_duration-x_duration_med,
+                    x_total_times_bias = total_times-x_total_times_med)]
+# 对每个指标做归一化处理
+dynamic_edges[,`:=`(x_win_rate_bias = (x_win_rate_bias - min(x_win_rate_bias)) / (max(x_win_rate_bias) - min(x_win_rate_bias)),
+                    x_escape_rate_bias = (x_escape_rate_bias - min(x_escape_rate_bias)) / (max(x_escape_rate_bias) - min(x_escape_rate_bias)),
+                    x_duration_bias = (x_duration_bias - min(x_duration_bias)) / (max(x_duration_bias) - min(x_duration_bias)),
+                    x_total_times_bias = (x_total_times_bias - min(x_total_times_bias)) / (max(x_total_times_bias) - min(x_total_times_bias)))]
+
+dynamic_edges[,`:=`(cheat_score = (0.4*abs(x_win_rate_bias) + 0.1*x_escape_rate_bias + 0.1*(-x_duration_bias) + 0.4*x_total_times_bias))]
+
+dynamic_edges[,cheat_score:=log(log(cheat_score+1))]
+
+qplot(cheat_score, data = dynamic_edges, geom = "density", fill = I("steelblue"), alpha = I(0.3))+theme_minimal()
+qplot(cheat_score, data = dynamic_nodes, geom = "density", fill = I("steelblue"), alpha = I(0.3))+theme_minimal()
+```
+```{r}
+dynamic_edges[,`:=`(cheat_score_mean=NULL,cheat_score_sd=NULL,is_cheat=NULL)]
+
+# 设置滑动窗口大小
+window_size <- 3
+
+# 计算每个用户在滑动窗口内的均值和标准差
+dynamic_edges[, `:=`(
+  cheat_score_mean = frollmean(cheat_score, window_size, align = "right",na.rm = TRUE),
+  cheat_score_sd = frollapply(cheat_score, window_size, sd, align = "right",na.rm = TRUE)
+), by = user_no.x]
+
+# 检测异常：如果cheat_score的变化大于均值 + 标准差，则判定为异常
+dynamic_edges[, is_cheat := ifelse(
+  abs(cheat_score - cheat_score_mean) > 1.15*cheat_score_sd, 1, 0
+), by = user_no.x]
+
+# 查看结果，标记为异常的用户
+dynamic_edges[is_cheat == 1]
+
+l1<-dynamic_edges[is_cheat == 1,.(user_no.x)]
+l2<-dynamic_edges[is_cheat == 1,.(user_no.y)]
+
+setnames(test2,"user_no.y","user_no.x")
+
+cheat_edge<-as.data.table(unique(rbind(test1,test2))$user_no.x)
+cheat_node<-as.data.table(dynamic_nodes[is_cheat == 1]$user_no.x)
+cheat_node<-unique(test_cheat_node)
+cheat_list<-as.data.table(intersect(test_cheat_edge$V1,test_cheat_node$V1))
+
+cheat_node
+cheat_edge
+cheat_list
+```
+
+
+```{r}
+
+summary(dynamic_edges)
+```
+
+```{r}
+dynamic_edges
+```
+
+
+
+```{r}
+
+ggplot(dynamic_edges, aes(x_win_rate_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+ggplot(dynamic_edges, aes(x_escape_rate_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+ggplot(dynamic_edges, aes(x_duration_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+ggplot(dynamic_edges, aes(x_total_times_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+
+```
+```{r}
+ggplot(dynamic_edges, aes(x_total_times_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+ggplot(dynamic_edges, aes(x_total_times_bias, cheat_score)) +
+  geom_hex(bins = 30) +
+  theme_minimal()
+```
+
+
+作弊玩家与非作弊玩家各指标差异
+
+【题目三】
+游戏水平相当的玩家被分在一局游戏会使游戏更有趣。请构建一个“玩家
+水平”指标的数值型变量（比如0-1 之间的数值，数值越高代表水平越高）。用
+于把“玩家水平”相似玩家分到一组中进行游戏。并且为每个用户计算该“玩家
+水平”指标。当然，如果你能实现任务（2）中的作弊指标，亦可以用作弊指标
+结合“玩家水平”指标，用于把爱作弊的玩家分在一起。
+
+```{r}
+library(stringr)
+
+
+# 提取女巫毒人的座位号
+game_record$witch_poison_id <- str_match(game_record$note, "3:\\[(\\d+)\\]P")[, 2]
+
+# 提取上警阶段被投出局的的座位号
+game_record$vote_out_id <- sapply(str_match_all(game_record$note, "100:\\[(\\d+)\\]"), function(x) x[, 2])
+
+# 提取猎人带走人的阵营号
+game_record$hunter_kill_id <- str_match(game_record$note, "CO\\[(\\d+)\\]")[, 2]
+
+# 提取预言家查验人的阵营号
+game_record$seer_check_id <- sapply(str_match_all(game_record$note, "2:\\[(\\d+)\\](.)"), function(x) x[, 3])
+
+# 提取守卫保护人的 ID
+game_record$guard_protect_id <- sapply(str_match_all(game_record$note, "6:\\[(\\d+)\\]"), function(x) x[, 2])
+
+# 提取狼人击杀的人的 ID
+game_record$wolf_kill_id <- sapply(str_match_all(game_record$note, "1:\\[(\\d+)\\]"), function(x) x[, 2])
+
+# 假设 `guard_protect_id` 和 `wolf_kill_id` 都是字符向量
+guard_wolf <- mapply(function(x, y) {
+  common <- intersect(x, y)
+  if (length(common) == 0) return(NA)  # 如果没有交集，则返回NA
+  return(common)
+}, game_record$guard_protect_id, game_record$wolf_kill_id)
+
+# 将结果保存在新的列中
+game_record$guard_wolf <- guard_wolf
+game_record[,`:=`(guard_protect_id=NULL,wolf_kill_id=NULL)]
+
+user_role_score<-merge(usergame_record[,.(game_no,user_no,seat_index,role_no)],game_record[,.(no,witch_poison_id,vote_out_id,hunter_kill_id,guard_wolf,seer_check_id)],by.x = "game_no",by.y = "no")
+setkey(user_role_score,game_no,user_no)
+user_role_score
+
+```
+
+```{r}
+user_role <- usergame_record[,.(life,win,total_times = .N),by=.(user_no,role_no)]
+setkey(user_role,user_no,role_no)
+# 胜利计数
+user_role[win == 1,`:=`(win_count = .N),by=.(user_no,role_no)]
+user_role[, `:=`(win_count = ifelse(is.na(win_count), 
+                                    unique(na.omit(win_count)), 
+                                    win_count)), by = .(user_no, role_no)]
+user_role[is.na(win_count),`:=`(win_count = 0)]
+
+#存活计数--对于狼人，自爆但是赢了算作存活，没赢算作死亡
+user_role[life == 1,`:=`(life_count = .N),by=.(user_no,role_no)]
+user_role[, `:=`(life_count = ifelse(is.na(life_count), 
+                                    unique(na.omit(life_count)), 
+                                    life_count)), by = .(user_no, role_no)]
+user_role[is.na(life_count),`:=`(life_count = 0)]
+user_role[life == 5 & win == 1,`:=`(life_count2 = .N),by=.(user_no,role_no)]
+user_role[, `:=`(life_count2 = ifelse(is.na(life_count2), 
+                                    unique(na.omit(life_count2)), 
+                                    life_count2)), by = .(user_no, role_no)]
+user_role[is.na(life_count2),`:=`(life_count2 = 0)]
+user_role[,`:=`(life_count = life_count + life_count2)]
+
+user_role[,`:=`(win_rate = win_count/total_times,life_rate=life_count/total_times)]
+user_role<-user_role[,-c(	"life","win","win_count","life_count","life_count2")]
+
+# 使用 data.table 的 key 去重
+user_role <- user_role[!duplicated(user_role[, .(user_no, role_no)])]
+user_role[, `:=`(sum_total_times = sum(total_times)), by = .(user_no)]
+
+setkey(user_role,user_no,role_no)
+user_role
+```
+```{r}
+user_role[, `:=`(score = 0)]  # 初始化 score
+```
+
+
+女巫得分计算
+```{r}
+# 1. 筛选出 `witch_poison_id == seat_index` 的行
+poisoned <- user_role_score[witch_poison_id == as.character(seat_index)]
+
+# 2. 区分两种情况并记录 `game_no`
+# 情况 1: `role_no == 1`
+game_case_1 <- poisoned[role_no == 1, unique(game_no)]
+
+# 情况 2: `role_no != 1`
+game_case_2 <- poisoned[role_no != 1, unique(game_no)]
+
+# 3. 找到每种情况下 game_no 中 role_no == 3 的 user_no
+case_1_user_no <- user_role_score[game_no %in% game_case_1 & role_no == 3, user_no]
+case_2_user_no <- user_role_score[game_no %in% game_case_2 & role_no == 3, user_no]
+
+#计算 case_1_user_no 和 case_2_user_no 中每个 user_no 的出现次数
+case_1_counts <- data.table(user_no = case_1_user_no)[, .N, by = user_no]
+case_2_counts <- data.table(user_no = case_2_user_no)[, .N, by = user_no]
+
+user_role[role_no==3, `:=`(score = total_times)]  # 初始化 score
+
+
+user_role<-merge(user_role,case_1_counts,by="user_no",all.x = TRUE)
+user_role<-merge(user_role,case_2_counts,by="user_no",all.x = TRUE)
+user_role[is.na(N.x),`:=`(N.x=0)][is.na(N.y),`:=`(N.y=0)]
+#更新分数
+user_role[role_no==3,score:=score+N.x-0.5*N.y]
+user_role[,`:=`(N.x=NULL,N.y=NULL)]
+user_role[role_no==3][order(-score)]
+
+```
+猎人得分计算
+```{r}
+# 1. 筛选出 `hunter_kill_id == seat_index` 的行
+hunter_killed <- user_role_score[hunter_kill_id == as.character(seat_index)]
+
+# 2. 区分两种情况并记录 `game_no`
+# 情况 1: `role_no == 1`
+game_case_1 <- hunter_killed[role_no == 1, unique(game_no)]
+
+# 情况 2: `role_no != 1`
+game_case_2 <- hunter_killed[role_no != 1, unique(game_no)]
+
+# 3. 找到每种情况下 game_no 中 role_no == 4 的 user_no
+case_1_user_no <- user_role_score[game_no %in% game_case_1 & role_no == 4, user_no]
+case_2_user_no <- user_role_score[game_no %in% game_case_2 & role_no == 4, user_no]
+
+#计算 case_1_user_no 和 case_2_user_no 中每个 user_no 的出现次数
+case_1_counts <- data.table(user_no = case_1_user_no)[, .N, by = user_no]
+case_2_counts <- data.table(user_no = case_2_user_no)[, .N, by = user_no]
+
+user_role[role_no==4, `:=`(score = total_times)]  # 初始化 score
+user_role<-merge(user_role,case_1_counts,by="user_no",all.x = TRUE)
+user_role<-merge(user_role,case_2_counts,by="user_no",all.x = TRUE)
+user_role[is.na(N.x),`:=`(N.x=0)][is.na(N.y),`:=`(N.y=0)]
+
+#更新分数
+user_role[role_no==4,score:=score+N.x-0.5*N.y]
+user_role[,`:=`(N.x=NULL,N.y=NULL)]
+user_role[role_no==4][order(-score)]
+```
+
+狼人得分计算
+```{r}
+# 1. 筛选出 vote_out_id 中包含 seat_index 的行
+# 使用 data.table 的向量化方式进行匹配
+user_role_score[, matched := mapply(function(v, s) s %in% v, vote_out_id, seat_index)]
+
+# 筛选出 matched 为 TRUE 的行
+vote_out_index <- user_role_score[matched == TRUE,.(user_no,role_no)]
+
+vote_out_index <- vote_out_index[role_no==1,.N,by=.(user_no)]
+
+# 4. 在 user_role 表中更新 score
+user_role <- merge(user_role, vote_out_index, by = "user_no", all.x = TRUE)
+
+# 如果没有匹配到的玩家，N 为 NA，设置为 0
+user_role[is.na(N), N := 0]
+
+# 5. 更新 score: role_no == 1 的玩家，score = score - 0.5 * N
+user_role[role_no == 1, `:=`(score = total_times)]
+user_role[role_no == 1, score := score - N]
+user_role[,`:=`(N=NULL)]
+user_role[role_no==1][order(-score)]
+
+```
+
+平民得分计算
+```{r}
+normal<-rbind(poisoned[role_no==0,.(user_no)],hunter_killed[role_no==0,.(user_no)])
+normal[,`:=`(N=.N),by=.(user_no)]
+normal<-unique(normal)
+
+user_role <- merge(user_role, normal, by = "user_no", all.x = TRUE)
+user_role[is.na(N), N := 0]
+
+user_role[role_no == 0, `:=`(score = total_times)]
+user_role[role_no == 0, score := score - 0.5*N]
+user_role[,`:=`(N=NULL)]
+user_role[role_no==0][order(-score)]
+```
+
+预言家得分计算
+```{r}
+# 展开处理列表列并计算差值
+user_role_score[, seer_check_id := lengths(lapply(seer_check_id, \(x) x[x == "B"])) - 
+                                0.5*lengths(lapply(seer_check_id, \(x) x[x == "G"]))]
+
+user_role_score[role_no == 2,seer_check_id:=sum(seer_check_id),by=user_no]
+prophet<-unique(user_role_score[role_no == 2,.(user_no,seer_check_id)])
+
+user_role <- merge(user_role, prophet, by = "user_no", all.x = TRUE)
+user_role[is.na(seer_check_id), seer_check_id := 0]
+user_role[role_no == 2, score := total_times]
+user_role[role_no == 2, score := score + seer_check_id]
+user_role[,`:=`(seer_check_id=NULL)]
+user_role[role_no==2][order(-score)]
+```
+守卫得分计算
+```{r}
+# 1. 将 `guard_wolf` 列中的列表展开并计数(计数出来多少，就说明守卫守住狼刀了多少)
+user_role_score[, guard_wolf := lengths(guard_wolf)]
+
+# 2. 筛选出 `role_no == 6` 的行
+user_role_score[role_no == 6,guard_wolf:=sum(guard_wolf),by=user_no]
+guard<-unique(user_role_score[role_no == 6,.(user_no,guard_wolf)])
+
+user_role[role_no==6, `:=`(score = total_times)]  # 初始化 score
+user_role <- merge(user_role, guard, by = "user_no", all.x = TRUE)
+user_role[is.na(guard_wolf), guard_wolf := 0]
+
+user_role[role_no == 6, score := score + 0.5*guard_wolf]
+user_role[,`:=`(guard_wolf=NULL)]
+user_role[role_no==6][order(-score)]
+```
+
+```{r}
+
+qplot(score,data = user_role,facets = ~role_no,geom = "histogram",fill = I("steelblue"),color = I("black"))+theme_minimal()
+```
+取对数操作
+```{r}
+user_role[role_no==0,score:=log(score+abs(min(user_role[role_no==0]$score))+10)]
+user_role[role_no==1,score:=log(score+abs(min(user_role[role_no==1]$score))+10)]
+user_role[role_no==2,score:=log(score+abs(min(user_role[role_no==2]$score))+10)]
+user_role[role_no==3,score:=log(score+abs(min(user_role[role_no==3]$score))+10)]
+user_role[role_no==4,score:=log(score+abs(min(user_role[role_no==4]$score))+10)]
+user_role[role_no==6,score:=log(score+abs(min(user_role[role_no==6]$score))+10)]
+```
+
+```{r}
+qplot(score,data = user_role,facets = ~role_no,geom = "histogram",fill = I("steelblue"),color = I("black"))+theme_minimal()
+```
+归一化
+```{r}
+user_role[role_no==0,score:=(score-min(score)) / (max(score)-min(score))]
+user_role[role_no==1,score:=(score-min(score)) / (max(score)-min(score))]
+user_role[role_no==2,score:=(score-min(score)) / (max(score)-min(score))]
+user_role[role_no==3,score:=(score-min(score)) / (max(score)-min(score))]
+user_role[role_no==4,score:=(score-min(score)) / (max(score)-min(score))]
+user_role[role_no==6,score:=(score-min(score)) / (max(score)-min(score))]
+
+```
+计算各个角色对应role_level   综合score 胜率 存活率
+```{r}
+
+user_role[role_no==0,role_level:=0.1*win_rate+0.1*life_rate+0.8*score]
+user_role[role_no==1,role_level:=0.1*win_rate+0.1*life_rate+0.8*score]
+user_role[role_no==2,role_level:=0.1*win_rate+0.1*life_rate+0.8*score]
+user_role[role_no==3,role_level:=0.1*win_rate+0.1*life_rate+0.8*score]
+user_role[role_no==4,role_level:=0.2*win_rate+0.8*score]#猎人不考虑生存率
+user_role[role_no==6,role_level:=0.1*win_rate+0.1*life_rate+0.8*score]
+user_role
+```
+
+```{r}
+user_role[,N:=.N,by=user_no]
+user_role[,skill:=1/N*(sum(role_level)),by=user_no]
+
+user_role[,experience:=(sum_total_times-min(sum_total_times)) / (max(sum_total_times)-min(sum_total_times))]
+user_role[,user_level:=0.7*skill+0.3*experience]
+
+user_level <- unique(user_role[,.(user_no,user_level)])
+setkey(user_level,user_no)
+user_role
+user_level
+```
+
+画图
+```{r}
+library(ggplot2)
+
+
+# 计算分位数
+quantiles <- quantile(user_level$user_level, probs = c(0.95, 0.8, 0.4))
+
+# 划分区间
+user_level$level_group <- cut(user_level$user_level,
+                                     breaks = c(-Inf, quantiles, Inf),
+                                     labels = c("Top 5%", "5%-20%", "20%-60%", "60%-100%"),
+                                     include.lowest = TRUE)
+
+# 计算整体密度
+density_data <- density(user_level$user_level)
+density_df <- data.frame(x = density_data$x, y = density_data$y)
+
+# 为密度数据分组
+density_df$level_group <- cut(density_df$x,
+                              breaks = c(-Inf, quantiles, Inf),
+                              labels = c("60%-100%","20%-60%","5%-20%", "Top 5%" ),
+                              include.lowest = TRUE)
+
+# 定义渐变配色
+gradient_colors <- c("#FDE725", "#5DC863", "#21908C", "#3B528B")
+
+# 绘制密度图并填充渐变颜色
+ggplot(density_df, aes(x = x, y = y, fill = level_group)) +
+  geom_area(alpha = 0.8, color = "black", position = "identity") +  # 填充区域并保持边界
+  scale_fill_manual(values = gradient_colors) +  # 应用渐变配色到分组
+  labs(title = "User Level Density with Gradient Colors",
+       x = "User Level",
+       y = "Density") +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),  # 去除图例标题
+    legend.position = "top"          # 调整图例位置
+  )
+
+
+```
+
+
+
+进行分类--0是作弊玩家，1是新手玩家，2是初级玩家，3是中级玩家，4是高级玩家，5是超级玩家
+```{r}
+user_role[,category:=NULL]
+user_role[user_no%in%cheat_list$V1,category:=0]
+user_role[sum_total_times<10 & is.na(category),category:=1]
+user_role[user_level<quantiles[3] & is.na(category),category:=2]
+user_role[user_level<quantiles[2] & is.na(category),category:=3]
+user_role[user_level<quantiles[1] & is.na(category),category:=4]
+user_role[is.na(category),category:=5]
+
+# 确保 category 是因子（分类型变量）
+user_role$category <- as.factor(user_role$category)
+
+qplot(x=category,y=user_level,data = user_role,geom = "boxplot",color=category)+theme_minimal()
+
+qplot(x=category,y=experience,data = user_role,geom = "boxplot",color=category)+theme_minimal()
+
+qplot(x=category,y=skill,data = user_role,geom = "boxplot",color=category)+theme_minimal()
+```
+【对高级玩家和超级玩家进行更进一步的细分】
+为什么要更进一步细分？高级玩家和超级玩家的角色池更加全面，因此为了改进玩家体验，让他们在比赛中匹配到更适合自己的队友/对手，将这些玩家分为六个组别，每个组别代表一个角色。
+
+分类从喜爱程度（single_experience）和擅长程度（score）两个角度进行考虑，得到一个综合指标，对于一个玩家来说这个综合指标最高的角色就是他所属于的类别。
+```{r}
+
+qplot(x=category,y=sum_total_times,data = user_role,geom = "boxplot",color=category)+theme_minimal()
+user_role[,N:=as.factor(N)]
+qplot(N, data = user_role, facets = ~category, geom = "bar", 
+      fill = I("skyblue"), color = I("black")) +
+  theme_minimal() +
+  labs(
+    title = "Distribution of character pool (N) by Category",    # 设置图形标题
+    x = "character pool (N)" )+ scale_x_discrete(
+    breaks = unique(user_role$N),  # 显示所有N的取值
+    labels = unique(user_role$N)   # 设置x轴标签，确保每个N都显示
+  )                            
+
+```
+
+```{r}
+fined_user_role<-user_role[(category!=0)&(category!=1),.(user_no,role_no,total_times,score,user_level,category)]
+# 修改数据类型为 numeric
+fined_user_role[, total_times := as.numeric(total_times)]
+fined_user_role[role_no == 0 | role_no == 1, total_times := total_times / 4]
+
+
+fined_user_role[,`:=`(experience=(total_times-min(total_times))/(max(total_times)-min(total_times)))]
+fined_user_role[,`:=`(total_times=NULL,final_matrix=0.2*score+0.8*experience)]
+fined_user_role[,`:=`(role_category=role_no[which.max(final_matrix)]),by=.(user_no)]
+
+fined_user_role
+fined_user_role[role_category==role_no]
+
+unique(fined_user_role, by = "user_no")[,.N,by=role_category]
+
+```
+
+```{r}
+library(RColorBrewer)
+fined_user_role[,role_category:=as.factor(role_category)]
+dplot <- ggplot(fined_user_role[role_category==role_no], aes(category, fill = role_category))
+dplot + 
+  geom_bar(position = "fill") + 
+  theme_minimal() +
+  scale_fill_brewer(palette = "Spectral") 
+
+
+
+qplot(x=role_category,y=user_level,data = fined_user_role[role_category==role_no],geom = "boxplot",color=role_category)+theme_minimal()
+
+
+
+```
+可以看到，被分类到2346的超级玩家人数比例明显高于其他三类玩家，说明神职角色普遍是高水平玩家玩的更好一些。
+```{r}
+display.brewer.all()
+prop.table(table(fined_user_role[category==2]$role_category))
+prop.table(table(fined_user_role[category==5]$role_category))
+```
+
+【自设问题】
+最r热门角色/最冷门角色（通过总结所有）、易上手角色/难上手角色（从2、3这两个类别里统计）
+```{r}
+test<-user_role[,.(user_no,role_no,total_times,category)]
+test[role_no==0|role_no==1,total_times:=total_times/4]
+test[,`:=`(favorite_role=role_no[which.max(total_times)]),by=user_no]
+# 2 3 最热门/最冷门
+test<-test[,.(role_no,category,favorite_role)]
+test$favorite_role<-as.factor(test$favorite_role)
+qplot(favorite_role,data = test[category==2 | category==3],geom = "bar",fill = I("skyblue"), color = I("black"))+theme_minimal()+labs(x = "Role No", y = "count", title = "category preliminary & medium")
+# 4 5 最热门/最冷门
+test<-test[,.(role_no,category,favorite_role)]
+test$favorite_role<-as.factor(test$favorite_role)
+qplot(favorite_role,data = test[category==4 | category==5],geom = "bar",fill = I("skyblue"), color = I("black"))+theme_minimal()+labs(x = "Role No", y = "count", title = "category adavanced & super")
+
+
+easy_difficult_role<-user_role[category==2 | category==3,.(mean_score=mean(score)),by=.(role_no)]
+easy_difficult_role
+
+ggplot(easy_difficult_role, aes(x = as.factor(role_no), y = mean_score)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  theme_minimal() +
+  labs(x = "Role No", y = "Mean Score", title = "Bar Plot of Mean Score by Role No")
+
+```
+
+```{r}
+library(ggplot2)
+library(data.table)
+
+# 假设test是data.table格式
+
+# 计算category == 2 | category == 3中的favorite_role计数
+category_2_3_counts <- test[category == 2 | category == 3, .(count = .N), by = favorite_role]
+category_2_3_counts$group <- "Category 2 & 3"
+
+# 计算category == 4 | category == 5中的favorite_role计数
+category_4_5_counts <- test[category == 4 | category == 5, .(count = .N), by = favorite_role]
+category_4_5_counts$group <- "Category 4 & 5"
+
+# 合并两组数据
+test_combined <- rbind(category_2_3_counts, category_4_5_counts)
+
+# 将favorite_role作为因子
+test_combined$favorite_role <- as.factor(test_combined$favorite_role)
+
+# 绘制柱状图
+ggplot(test_combined, aes(x = favorite_role, y = count, fill = group)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), color = "black") +
+  theme_minimal() +
+  labs(x = "Favorite Role", y = "Count", title = "Favorite Role Distribution by Category") +
+  scale_fill_manual(values = c("skyblue", "orange"))  # 蓝色和橙色柱子
+
+
+
+```
+
+【题目四】
+不同类型的用户个性不同，相似的用户可能对同样的广告、氪金项目感兴
+趣，请给出用户分类的方法，并说明其道理。给出分类方法的算法、R 代码、分
+类的用户id 组数据。
+```{r}
+
+user_activate_degree <- merge(usergame_record[,.(game_no,user_no)],game_record[,.(no,starttime)],by.x="game_no",by.y="no")
+setkey(user_activate_degree,user_no)
+user_activate_degree<-user_activate_degree[,`:=`(count=.N),by=.(user_no)][,-c("game_no")]
+user_activate_degree$starttime <- as.Date(user_activate_degree$starttime)
+user_activate_degree[,attendance:=NULL]
+user_activate_degree<-user_activate_degree[!duplicated(user_activate_degree[,.(user_no,starttime)])]
+user_activate_degree[,attendance:=.N,by=.(user_no)]
+user_activate_degree[,count_avg:=count/attendance]
+user_activate_degree[,activate_degree:=0.5*attendance+0.5*count_avg]
+
+user_activate_degree<-user_activate_degree[!duplicated(user_activate_degree[,.(user_no)])]
+user_activate_degree
+
+user_classification<-merge(user_activate_degree[,.(user_no,activate_degree),],user_role[!duplicated(user_role[,.(user_no)])][,.(user_no,N,user_level)],by="user_no")
+user_classification
+```
+```{r}
+#对数据进行标准化
+user_classification[,`:=`(activate_degree=scale(activate_degree),N=scale(N),user_level=scale(user_level))]
+
+# 运行 K-means 聚类算法
+set.seed(123) # 确保结果可复现
+kmeans_result <- kmeans(user_classification[,.(activate_degree,N,user_level)], centers = 3)
+
+# 将聚类结果加入原表
+user_classification[, cluster := kmeans_result$cluster]
+
+user_classification
+```
+
+```{r}
+
+scatterplot3d(
+  x = user_classification$activate_degree,  # X 轴
+  y = user_classification$N,               # Y 轴
+  z = user_classification$user_level,      # Z 轴
+  color = as.numeric(user_classification$cluster),  # 根据聚类颜色分组
+  pch = 16,                                # 点的形状
+  main = "User Clustering(3 types)",
+  xlab = "Activate Degree",
+  ylab = "N",
+  zlab = "User Level",
+  grid = TRUE
+)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
